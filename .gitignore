@@ -1,0 +1,12 @@
+# Результаты сборки
+dist/
+fyne-cross/
+*.app/
+*.dmg
+*.exe
+*.tar.xz
+
+# Локальные файлы ОС и редакторов
+.DS_Store
+.vscode/
+.idea/

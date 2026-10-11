@@ -1,0 +1,6 @@
+[Details]
+Icon = "assets/icon.png"
+Name = "SSH Tunnel"
+ID = "com.geekproxy.sshtunnel"
+Version = "1.0.0"
+Build = 4
