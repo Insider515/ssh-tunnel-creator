@@ -1,0 +1,27 @@
+# SSH Tunnel
+
+> Desktop application that forwards a local TCP port through an intermediate (jump) SSH server to a remote `target_host:target_port`.
+
+A Go + Fyne GUI tool for operators who need to reach a service that is only accessible from a bastion host. The application opens an SSH connection to the jump server, forwards TCP from a chosen local port to `target_host:target_port`, and surfaces real connection state in the window (not just "local port opened"). It supports password, private key (with passphrase), and `ssh-agent` authentication, verifies the jump host key against `known_hosts`, keeps the session alive with `keepalive@openssh.com`, and can auto-reconnect with exponential backoff. Connection profiles are stored locally; passwords live in the OS keychain (Keychain / Credential Manager / Secret Service). Targets macOS (Apple Silicon and Intel), Windows x64, and Linux x64.
+
+## Core
+- [README](https://github.com/Insider515/ssh-tunnel-creator/blob/master/README.md): features, build, usage, data locations, project layout
+- [README (Ukrainian)](https://github.com/Insider515/ssh-tunnel-creator/blob/master/README.uk.md): same content translated
+
+## Build and run
+- [Makefile](https://github.com/Insider515/ssh-tunnel-creator/blob/master/Makefile): build targets for the three platforms, icon generation, packaging
+- [FyneApp.toml](https://github.com/Insider515/ssh-tunnel-creator/blob/master/FyneApp.toml): Fyne application metadata
+- [go.mod](https://github.com/Insider515/ssh-tunnel-creator/blob/master/go.mod): module `sshtunnel`, Go 1.26, Fyne v2.8, `golang.org/x/crypto/ssh`
+
+## Source
+- [cmd/sshtunnel](https://github.com/Insider515/ssh-tunnel-creator/tree/master/cmd/sshtunnel): application entry point
+- [internal/tunnel](https://github.com/Insider515/ssh-tunnel-creator/tree/master/internal/tunnel): SSH connection, host-key verification, port forwarding, keepalive, reconnect
+- [internal/ui](https://github.com/Insider515/ssh-tunnel-creator/tree/master/internal/ui): Fyne windows, forms, language picker, terminal theme
+- [internal/config](https://github.com/Insider515/ssh-tunnel-creator/tree/master/internal/config): connection profiles, keychain-backed secret storage
+- [internal/i18n](https://github.com/Insider515/ssh-tunnel-creator/tree/master/internal/i18n): translations
+- [internal/startup](https://github.com/Insider515/ssh-tunnel-creator/tree/master/internal/startup): launch-at-login integration per platform
+- [tools/genicon](https://github.com/Insider515/ssh-tunnel-creator/tree/master/tools/genicon): icon-generation helper used by the Makefile
+
+## Platform notes
+- [macos/](https://github.com/Insider515/ssh-tunnel-creator/tree/master/macos): macOS-specific packaging material (first-launch notes, Info.plist overrides)
+- [assets/](https://github.com/Insider515/ssh-tunnel-creator/tree/master/assets): screenshot, icon sources
