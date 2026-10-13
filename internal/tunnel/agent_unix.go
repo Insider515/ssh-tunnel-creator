@@ -7,18 +7,19 @@ import (
 	"fmt"
 	"net"
 	"os"
+
+	"sshtunnel/internal/i18n"
 )
 
-// dialAgent открывает соединение с ssh-agent через unix-сокет из SSH_AUTH_SOCK.
-// Так агент адресуется на macOS и Linux.
+// dialAgent connects to ssh-agent through the Unix socket in SSH_AUTH_SOCK.
 func dialAgent() (net.Conn, error) {
 	sock := os.Getenv("SSH_AUTH_SOCK")
 	if sock == "" {
-		return nil, errors.New("ssh-agent не найден: переменная SSH_AUTH_SOCK не задана")
+		return nil, errors.New(i18n.T("SSH-agent was not found: SSH_AUTH_SOCK is not set"))
 	}
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось подключиться к ssh-agent по адресу %s: %w", sock, err)
+		return nil, fmt.Errorf(i18n.T("Could not open a connection to ssh-agent at %s: %w"), sock, err)
 	}
 	return conn, nil
 }

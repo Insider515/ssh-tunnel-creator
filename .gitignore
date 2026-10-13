@@ -1,4 +1,4 @@
-# Результаты сборки
+# Build outputs
 dist/
 fyne-cross/
 *.app/
@@ -6,7 +6,7 @@ fyne-cross/
 *.exe
 *.tar.xz
 
-# Локальные файлы ОС и редакторов
+# Local operating-system and editor files
 .DS_Store
 .vscode/
 .idea/

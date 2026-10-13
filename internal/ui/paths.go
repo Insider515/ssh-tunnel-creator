@@ -5,8 +5,7 @@ import (
 	"path/filepath"
 )
 
-// sshDir возвращает каталог ~/.ssh, если он существует.
-// Используется как начальный каталог в диалоге выбора файла приватного ключа.
+// sshDir returns ~/.ssh when it exists, for use as the private-key file dialog's initial directory.
 func sshDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {

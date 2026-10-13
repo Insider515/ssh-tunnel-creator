@@ -1,117 +1,88 @@
 # SSH Tunnel
 
-Приложение с графическим интерфейсом для создания TCP-туннеля через промежуточный
-(jump) SSH-сервер. Локальный порт на машине оператора прокидывается на
-`target_host:target_port`, куда соединение открывает jump-сервер от своего имени.
-Клиенты (браузер, DBeaver, ssh, mysql) подключаются к `127.0.0.1:<локальный порт>`.
+![SSH Tunnel](assets/screenshot.png)
 
-Переписано на Go с Electron-версии `electron-ssh-tunnel`. Ранняя версия была
-реализована на Electron + `ssh2`; та сборка, что установлена в `/Applications`,
-соответствует файлу `main 2.js` из того репозитория.
+A desktop application for creating a TCP tunnel through an intermediate (jump) SSH server. The jump server connects to `target_host:target_port`; local applications connect to `127.0.0.1:<local port>`.
 
-- Язык: Go 1.26
-- Интерфейс: Fyne v2.8
-- SSH: `golang.org/x/crypto/ssh`
-- Платформы: macOS (Apple Silicon и Intel), Windows x64, Linux x64
+The application is written in Go with Fyne. It supports macOS (Apple Silicon and Intel), Windows x64, and Linux x64.
 
-## Возможности
+## Features
 
-- Аутентификация на jump-сервере: пароль, файл приватного ключа (с passphrase), `ssh-agent`.
-- Настоящая проверка соединения отдельной кнопкой: TCP → SSH-рукопожатие с проверкой
-  ключа хоста → аутентификация → канал до целевого узла → проверка, что локальный порт свободен.
-- Проверка ключа хоста по `known_hosts` с подтверждением незнакомого ключа оператором.
-- Keepalive и обнаружение обрыва связи, по желанию — автоматическое переподключение
-  с нарастающей паузой.
-- Профили подключений. Секреты в файл профилей не пишутся: пароль по желанию
-  хранится в системном хранилище ОС (Keychain, Credential Manager, Secret Service).
-- Журнал работы в самом окне, со счётчиком активных и обслуженных соединений.
+- Password, private-key, and `ssh-agent` authentication.
+- Connection checks for jump-server TCP reachability, SSH authentication, host-key verification, target reachability through the jump server, and local-port availability.
+- Jump-server host-key verification using the application's known-hosts file and `~/.ssh/known_hosts`. A new key requires confirmation; a changed saved key is rejected.
+- Keepalive, connection-loss detection, and optional automatic reconnect.
+- Connection profiles. Passwords are not stored in profile files; optional password storage uses the operating system credential store.
+- An in-window log with status, active and total connection counts, copy, export, and clear controls.
+- English and Ukrainian interface languages; English is selected on first launch.
+- Optional startup at login and automatic connection to a selected default profile.
+- On launch, the configured default profile is selected if it exists; otherwise the first profile in alphabetical order is selected. Selection alone does not start a connection.
 
-## Что исправлено относительно Electron-версии
+## Build and run
 
-Ссылки на строки — по файлу `main 2.js` (код установленной сборки) и `renderer.js`
-репозитория `electron-ssh-tunnel`.
-
-| Дефект в Electron-версии | Факт | Как сделано здесь |
-|---|---|---|
-| Проверки соединения не было вовсе. Статус «Tunnel active» выставлялся по событию `listening` локального TCP-сервера, то есть подтверждал только то, что порт занят самим приложением. | `main 2.js:53-55` | `Tunnel.Check` и `Tunnel.Start` проходят четыре стадии и сообщают, какая именно не прошла. Порт занимается только после успеха всех стадий. Проверено тестами `TestStartDoesNotOpenPortWhenTargetUnreachable`, `TestCheckDetectsWrongPassword`, `TestCheckDetectsUnreachableJump`, `TestCheckDetectsBusyLocalPort`. |
-| Ошибка `forwardOut` при обслуживании клиента уходила только в `console.error`, в интерфейс не попадала. | `main 2.js:40-43` | Каждая ошибка пишется в журнал в окне. |
-| Обрыв связи с jump-сервером вызывал `reject` уже выполненного Promise. Такой вызов в JS игнорируется, и окно продолжало показывать «Tunnel active». | `main 2.js:57-62` | Отдельная горутина следит за `client.Wait()` и шлёт keepalive; обрыв сразу меняет состояние в окне. |
-| Keepalive не настраивался, а в `ssh2` он по умолчанию выключен. Соединение, выброшенное NAT или межсетевым экраном по тайм-ауту, умирало молча. | `ssh2@1.17.0/lib/client.js:137-140`: при отсутствии `keepaliveInterval` ставится `0` | Keepalive-запрос `keepalive@openssh.com` с интервалом, задаваемым в окне (по умолчанию 15 с). |
-| Ключ хоста не проверялся: `connect()` вызывался без `hostVerifier`. | `main 2.js:63-68`; `ssh2@1.17.0/lib/protocol/kex.js:1194-1198` — «Host accepted by default (no verification)» | Проверка по `~/.ssh/known_hosts` и по файлу приложения. Незнакомый ключ — вопрос оператору, несовпадение с сохранённым — отказ. Тесты `TestHostKeyMismatchIsRejected`, `TestHostKeyUnknownRequiresConfirmation`. |
-| Пароль jump-сервера был вписан в разметку как значение поля и попал в собранный `app.asar`. | `index.html:24` | В коде и в файле профилей секретов нет. Пароль вводится в окне, по желанию кладётся в системное хранилище ОС. Тест `TestSaveStoresNoSecrets`. |
-| У локального сокета обрабатывалось только событие `close`. В Node.js событие `error` без обработчика — необработанное исключение, то есть падение всего приложения при обрыве клиента (EPIPE, ECONNRESET). | `main 2.js:46-48` | Ошибки копирования остаются внутри горутины соединения и попадают в журнал. |
-| «Stop Tunnel» вызывал `localServer.close()`, который по документации Node прекращает приём новых подключений, но не разрывает уже открытые. Для подключённых клиентов туннель продолжал работать. | `main 2.js:77-80` | `Tunnel.Stop` закрывает слушателя и принудительно рвёт все отслеживаемые соединения. Тест `TestStopClosesActiveConnections`. |
-| Порты читались как `parseInt(...)` без проверки. Пустое поле давало `NaN`, и `listen(NaN)` поднимал слушателя на произвольном свободном порту. | `renderer.js:12-18` | Разбор полей с внятной ошибкой до обращения к сети. Тесты `TestCollectProfileRejectsBadPort`, `TestValidateRejectsBadFields`. |
-| Аутентификация только паролем. | `main 2.js:63-68` | Пароль (включая `keyboard-interactive`), файл приватного ключа с passphrase, `ssh-agent` (в Windows — именованный канал OpenSSH). |
-| Параметры подключения не сохранялись, значения были захардкожены в разметке. | `index.html:15-30` | Профили в файле конфигурации пользователя, с выбором в окне. |
-| Автоматического переподключения не было. | — | Переподключение с нарастающей паузой, слушатель при этом не закрывается. Тест `TestReconnectAfterJumpLoss`. |
-| Размер дистрибутива: dmg 110 МБ, в составе Chromium. | `dist/electron-ssh-tunnel-1.0.0-arm64.dmg` — 110 628 771 байт | Один бинарник: ~33 МБ под arm64, ~35 МБ под amd64, ~46 МБ под Windows. |
-
-## Сборка
-
-Требуется Go 1.26 и компилятор C для текущей платформы (Fyne использует CGO).
-В `go.mod` объявлено `go 1.26.0`: при `GOTOOLCHAIN=auto` нужная версия
-скачивается автоматически, даже если в системе установлена более старая.
+Requires Go 1.26 or newer and a C compiler for the current platform (Fyne uses CGO).
 
 ```bash
-make test       # тесты с детектором гонок
-make tools      # установка упаковщиков fyne и fyne-cross
-make mac        # универсальный бинарник (arm64+amd64) и бандл .app в dist/mac
-make mac-dmg    # образ dmg в dist
-make windows    # dist/windows/sshtunnel.exe
-make linux      # сборка под Linux x64 в Docker через fyne-cross
-make icon       # перерисовать assets/icon.png
+make all        # static analysis, tests, and build for the current OS
+make run        # launch from source
+make test       # tests with the race detector
+make tools      # install Fyne packaging tools
+make mac        # universal macOS binary and app bundle
+make mac-dmg    # macOS disk image with first-launch instructions
+make windows    # Windows x64 executable
+make linux      # Linux x64 package using Docker and fyne-cross
+make icon       # regenerate assets/icon.png
 ```
 
-Сборка под каждую платформу:
+For macOS, `make mac` requires Xcode Command Line Tools. The app bundle is unsigned. The disk image includes `macos/FIRST-LAUNCH.txt`, which explains how to open the app using macOS's standard security prompt.
 
-- **macOS.** Нужны Command Line Tools. `make mac` собирает два бинарника и склеивает
-  их `lipo` в универсальный, затем `fyne package` делает бандл `SSH Tunnel.app`.
-  Бандл не подписан: при первом запуске macOS потребует разрешения в
-  «Системные настройки → Конфиденциальность и безопасность».
-- **Windows.** Кросс-сборка с macOS компилятором `mingw-w64`
-  (`brew install mingw-w64`). Флаг `-H windowsgui` убирает окно консоли.
-- **Linux (Ubuntu).** Кросс-сборка требует заголовков X11 и OpenGL, поэтому идёт
-  в контейнере: нужны `fyne-cross` и запущенный Docker. Две особенности, учтённые
-  в цели `linux` Makefile:
-  - в образ передаётся `GOTOOLCHAIN=auto`, так как в образе `fyneio/fyne-cross-images:linux`
-    стоит Go 1.25 с `GOTOOLCHAIN=local`, а `golang.org/x/crypto` требует `go >= 1.26.0`;
-  - пакет указывается явно (`./cmd/sshtunnel`), иначе `fyne-cross` берёт корень модуля,
-    где файлов `.go` нет, и падает с `no Go files in /app`.
+The Windows cross-build from macOS requires `mingw-w64`. The Linux cross-build requires Docker and `fyne-cross`; on Ubuntu itself, build with `go build ./cmd/sshtunnel` after installing `libgl1-mesa-dev xorg-dev libxkbcommon-dev`.
 
-  На самой Ubuntu контейнер не нужен: достаточно `go build ./cmd/sshtunnel`
-  при установленных пакетах `libgl1-mesa-dev xorg-dev libxkbcommon-dev`.
+## Use
 
-## Использование
+1. Create a profile and set its name and local listening port.
+2. Enter the jump-server address, port, username, and authentication method.
+3. Enter the target-server address and port. This is the address the jump server must be able to reach.
+4. Configure host-key verification, automatic reconnect, and keepalive.
+5. Save the profile. Use **Check connection** to test the route without leaving a tunnel running, then choose **Connect** to start it.
+6. Connect local applications to `127.0.0.1:<local port>`. Use **Stop** to close the listener and active tunnel connections.
+7. In application settings, choose English or Ukrainian, optionally enable startup at login, and select a default profile.
+8. Enable automatic connection separately if the selected default profile should connect when the application starts. A default profile is required for this option.
 
-1. **Локальный порт** — порт на машине оператора, к которому подключаются программы.
-2. **Jump-сервер** — адрес, порт, пользователь и способ аутентификации промежуточного сервера.
-3. **Целевой сервер** — адрес и порт конечного узла, куда jump-сервер открывает соединение.
-4. **Параметры соединения** — проверка ключа хоста, автопереподключение, интервал keepalive.
-5. **Проверить соединение** — проходит все стадии и ничего не оставляет запущенным.
-6. **Запустить** — после успешной проверки занимает локальный порт.
-7. Клиенты подключаются к `127.0.0.1:<локальный порт>`.
+The listener binds to `127.0.0.1` and is not exposed to the local network. If automatic reconnect is enabled, the local listener remains open while the application retries the SSH connection.
 
-Слушатель поднимается только на `127.0.0.1`: туннель не доступен из сети.
+### Authentication and host keys
 
-## Где приложение хранит данные
+- **Password** sends the entered password through SSH password or keyboard-interactive authentication.
+- **Private key** reads the selected key file; an encrypted key also requires its passphrase.
+- **ssh-agent** uses keys available from the running agent.
+- When host-key verification is enabled, known keys are read from the application's `known_hosts` file and, if present, `~/.ssh/known_hosts`. A previously unseen key is added to the application's file only after confirmation. The user's `~/.ssh/known_hosts` file is not modified.
+- Disabling host-key verification permits server impersonation and is not recommended.
+- Passwords and key passphrases are not written to profile files. If password remembering is enabled, the password is stored in the operating system credential store.
 
-| Что | Где |
-|---|---|
-| Профили подключений (без секретов) | `<каталог конфигурации пользователя>/sshtunnel/profiles.json` |
-| Подтверждённые ключи хостов | `<каталог конфигурации пользователя>/sshtunnel/known_hosts` |
-| Пароли (только если включено «Запомнить пароль») | системное хранилище секретов ОС, служба `sshtunnel` |
+### Logs
 
-Каталог конфигурации пользователя: `~/Library/Application Support` в macOS,
-`~/.config` в Linux, `%AppData%` в Windows. Файл `known_hosts` пользователя
-приложение читает, но не изменяет.
+The main window shows the selected profile's log. **Copy** places the displayed log in the clipboard, **Export** saves it as a text file, and **Clear** removes the in-memory entries. Up to 1,000 recent log lines are retained during a run.
 
-## Структура проекта
+## Data locations
 
-```
-cmd/sshtunnel/        точка входа
-internal/tunnel/      соединение, проверка, перекачка данных, keepalive, ключи хостов
-internal/config/      профили и работа с системным хранилищем секретов
-internal/ui/          окно на Fyne
-tools/genicon/        генератор assets/icon.png
+The application uses the operating system's user configuration directory and stores its files in the `sshtunnel` subdirectory:
+
+- `profiles.json` — connection profiles and non-secret connection options.
+- `settings.json` — interface language, startup-at-login option, and default-profile settings.
+- `known_hosts` — jump-server keys accepted by the user.
+
+Remembered passwords are stored separately in the operating system credential store. Private-key files remain at their original paths. The user's `~/.ssh/known_hosts` file may be read for verification but is not modified.
+
+## Project layout
+
+```text
+cmd/sshtunnel/        application entry point
+internal/tunnel/      SSH tunnel and connection lifecycle
+internal/config/      profiles, preferences, and credential-store access
+internal/i18n/        English and Ukrainian translations
+internal/startup/     per-user startup integration
+internal/ui/          Fyne interface
+tools/genicon/        icon generator
+macos/                macOS first-launch instructions included in the DMG
 ```

@@ -1,0 +1,27 @@
+SSH Tunnel — first launch on macOS
+
+This app bundle is not signed or notarized. macOS may block it the first time it opens.
+Only continue if you trust the source of the app.
+
+1. Drag SSH Tunnel.app to Applications.
+2. In Finder, Control-click SSH Tunnel.app and choose Open.
+3. In the confirmation dialog, choose Open again.
+
+If macOS still blocks the app, open System Settings > Privacy & Security and choose
+Open Anyway for SSH Tunnel. This option appears after macOS has blocked an attempt
+to open the app.
+
+---
+
+SSH Tunnel — перший запуск у macOS
+
+Цей пакет програми не підписаний і не нотаризований. Під час першого запуску macOS
+може заблокувати його. Продовжуйте лише тоді, коли довіряєте джерелу програми.
+
+1. Перетягніть SSH Tunnel.app до папки Applications.
+2. У Finder натисніть SSH Tunnel.app правою кнопкою миші, утримуючи Control, і виберіть Open.
+3. У вікні підтвердження ще раз виберіть Open.
+
+Якщо macOS і далі блокує програму, відкрийте System Settings > Privacy & Security
+і виберіть Open Anyway для SSH Tunnel. Цей параметр з'являється після спроби запуску,
+заблокованої macOS.

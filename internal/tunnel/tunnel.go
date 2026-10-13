@@ -1,6 +1,5 @@
-// Package tunnel реализует TCP-туннель через промежуточный (jump) SSH-сервер:
-// локальный порт на машине оператора прокидывается на target_host:target_port,
-// куда jump-сервер открывает соединение от своего имени.
+// Package tunnel implements a TCP tunnel through an intermediate (jump) SSH server.
+// The jump server connects to target_host:target_port on behalf of the operator's local port.
 package tunnel
 
 import (
@@ -15,27 +14,28 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+	"sshtunnel/internal/i18n"
 )
 
-// Status — состояние туннеля для отображения в интерфейсе.
+// Status is a tunnel state displayed in the interface.
 type Status string
 
 const (
-	// StatusIdle — туннель не запущен.
-	StatusIdle Status = "неактивен"
-	// StatusChecking — идёт проверка или установка соединения.
-	StatusChecking Status = "проверка"
-	// StatusActive — туннель работает, локальный порт слушается.
-	StatusActive Status = "активен"
-	// StatusReconnecting — связь с jump-сервером потеряна, идут попытки восстановления.
-	StatusReconnecting Status = "переподключение"
-	// StatusError — последняя операция завершилась ошибкой.
-	StatusError Status = "ошибка"
+	// StatusIdle means the tunnel is not running.
+	StatusIdle Status = "Idle"
+	// StatusChecking means the connection is being checked or established.
+	StatusChecking Status = "Checking"
+	// StatusActive means the tunnel is running and listening on its local port.
+	StatusActive Status = "Active"
+	// StatusReconnecting means the jump connection was lost and reconnection is in progress.
+	StatusReconnecting Status = "Reconnecting"
+	// StatusError means the most recent operation failed.
+	StatusError Status = "Error"
 )
 
-// Config — полный набор параметров туннеля.
+// Config contains all tunnel parameters.
 type Config struct {
-	LocalHost string // адрес локального слушателя; пусто означает 127.0.0.1
+	LocalHost string // The local listener address; an empty value means 127.0.0.1.
 	LocalPort int
 
 	JumpHost string
@@ -55,22 +55,21 @@ type Config struct {
 	AutoReconnect  bool
 }
 
-// Stats — счётчики соединений для интерфейса.
+// Stats contains connection counters for the interface.
 type Stats struct {
-	Active int    // открытых прямо сейчас
-	Total  uint64 // обслужено с момента запуска
+	Active int    // Connections currently open.
+	Total  uint64 // Connections served since startup.
 }
 
-// Callbacks — функции, через которые туннель сообщает интерфейсу о своём состоянии.
-// Вызываются из рабочих горутин, поэтому реализация обязана сама переносить
-// обновления в поток интерфейса.
+// Callbacks report tunnel state to the interface.
+// Callbacks run from worker goroutines; implementations must dispatch UI updates themselves.
 type Callbacks struct {
 	OnStatus func(Status, string)
 	OnLog    func(string)
 	OnStats  func(Stats)
 }
 
-// Tunnel — жизненный цикл одного туннеля: проверка, запуск, перекачка данных, остановка.
+// Tunnel manages one tunnel's lifecycle: validation, startup, data transfer, and shutdown.
 type Tunnel struct {
 	cfg Config
 	cb  Callbacks
@@ -85,8 +84,7 @@ type Tunnel struct {
 	total atomic.Uint64
 }
 
-// New создаёт туннель с заданными параметрами и подставляет значения по умолчанию
-// для таймаута соединения, keepalive и локального адреса.
+// New creates a tunnel and supplies defaults for the connection timeout, keepalive, and local address.
 func New(cfg Config, cb Callbacks) *Tunnel {
 	if cfg.LocalHost == "" {
 		cfg.LocalHost = "127.0.0.1"
@@ -100,75 +98,73 @@ func New(cfg Config, cb Callbacks) *Tunnel {
 	return &Tunnel{cfg: cfg, cb: cb}
 }
 
-// Validate проверяет параметры до попытки соединения, чтобы пустое или нечисловое
-// поле в интерфейсе не превращалось в случайно выбранный порт или невнятную ошибку сети.
+// Validate checks parameters before connecting, so invalid fields do not become arbitrary ports
+// or unclear network errors.
 func (c Config) Validate() error {
-	if err := validatePort("локальный порт", c.LocalPort); err != nil {
+	if err := validatePort(i18n.T("Local port"), c.LocalPort); err != nil {
 		return err
 	}
 	if c.JumpHost == "" {
-		return errors.New("не указан адрес jump-сервера")
+		return errors.New(i18n.T("Jump server address is not set"))
 	}
-	if err := validatePort("порт jump-сервера", c.JumpPort); err != nil {
+	if err := validatePort(i18n.T("Jump server port"), c.JumpPort); err != nil {
 		return err
 	}
 	if c.JumpUser == "" {
-		return errors.New("не указано имя пользователя jump-сервера")
+		return errors.New(i18n.T("Jump server username is not set"))
 	}
 	if c.TargetHost == "" {
-		return errors.New("не указан адрес целевого сервера")
+		return errors.New(i18n.T("Target server address is not set"))
 	}
-	if err := validatePort("порт целевого сервера", c.TargetPort); err != nil {
+	if err := validatePort(i18n.T("Target server port"), c.TargetPort); err != nil {
 		return err
 	}
 	switch c.Auth.Method {
 	case AuthPassword, AuthKey, AuthAgent:
 	default:
-		return fmt.Errorf("неизвестный способ аутентификации: %q", c.Auth.Method)
+		return fmt.Errorf(i18n.T("Unknown authentication method: %q"), c.Auth.Method)
 	}
 	return nil
 }
 
-// validatePort проверяет, что номер порта попадает в допустимый диапазон TCP.
+// validatePort checks that a port is in the valid TCP range.
 func validatePort(name string, port int) error {
 	if port < 1 || port > 65535 {
-		return fmt.Errorf("%s должен быть числом от 1 до 65535, получено %d", name, port)
+		return fmt.Errorf(i18n.T("%s must be an integer from 1 to 65535, got %d"), name, port)
 	}
 	return nil
 }
 
-// LocalAddr — адрес, который слушает туннель на машине оператора.
+// LocalAddr returns the address listened to by the tunnel on the operator's machine.
 func (c Config) LocalAddr() string {
 	return net.JoinHostPort(c.LocalHost, strconv.Itoa(c.LocalPort))
 }
 
-// JumpAddr — адрес промежуточного SSH-сервера.
+// JumpAddr returns the intermediate SSH server address.
 func (c Config) JumpAddr() string {
 	return net.JoinHostPort(c.JumpHost, strconv.Itoa(c.JumpPort))
 }
 
-// TargetAddr — адрес конечного сервера, куда jump-сервер открывает соединение.
+// TargetAddr returns the destination address opened by the jump server.
 func (c Config) TargetAddr() string {
 	return net.JoinHostPort(c.TargetHost, strconv.Itoa(c.TargetPort))
 }
 
-// Running сообщает, запущен ли туннель.
+// Running reports whether the tunnel is running.
 func (t *Tunnel) Running() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.running
 }
 
-// Check выполняет настоящую проверку соединения и ничего не оставляет запущенным:
-// TCP до jump-сервера, SSH-рукопожатие с проверкой ключа хоста, аутентификация,
-// открытие канала до целевого узла и проверка, что локальный порт свободен.
-// Успех означает, что все четыре условия выполнены на самом деле.
+// Check verifies the TCP connection, SSH handshake and host key, authentication, destination
+// channel, and local port availability without leaving anything running.
 func (t *Tunnel) Check(ctx context.Context) error {
 	if err := t.cfg.Validate(); err != nil {
 		t.status(StatusError, err.Error())
 		return err
 	}
-	t.status(StatusChecking, "проверка соединения")
+	t.status(StatusChecking, i18n.T("Checking connection"))
 
 	client, err := t.connect(ctx)
 	if err != nil {
@@ -180,28 +176,25 @@ func (t *Tunnel) Check(ctx context.Context) error {
 	if !t.Running() {
 		ln, err := net.Listen("tcp", t.cfg.LocalAddr())
 		if err != nil {
-			e := fmt.Errorf("локальный адрес %s занят другим процессом: %w", t.cfg.LocalAddr(), err)
+			e := fmt.Errorf(i18n.T("Local address %s is busy: %w"), t.cfg.LocalAddr(), err)
 			t.status(StatusError, e.Error())
 			return e
 		}
 		ln.Close()
-		t.logf("локальный адрес %s свободен", t.cfg.LocalAddr())
+		t.logf(i18n.T("Local address %s is available"), t.cfg.LocalAddr())
 	}
 
-	msg := fmt.Sprintf("проверка пройдена: %s доступен через %s", t.cfg.TargetAddr(), t.cfg.JumpAddr())
+	msg := fmt.Sprintf(i18n.T("Connection check passed: %s is reachable through %s"), t.cfg.TargetAddr(), t.cfg.JumpAddr())
 	t.status(StatusIdle, msg)
 	return nil
 }
 
-// Start проверяет соединение и, только если проверка прошла, занимает локальный порт
-// и начинает обслуживать клиентов. Обратное к Electron-версии поведение: там статус
-// "активен" выставлялся по факту открытия локального порта, то есть ещё до того,
-// как выяснялось, доступен ли целевой узел.
+// Start verifies the connection before binding the local port and serving clients.
 func (t *Tunnel) Start(parent context.Context) error {
 	t.mu.Lock()
 	if t.running {
 		t.mu.Unlock()
-		return errors.New("туннель уже запущен")
+		return errors.New(i18n.T("Tunnel is already running"))
 	}
 	t.mu.Unlock()
 
@@ -212,7 +205,7 @@ func (t *Tunnel) Start(parent context.Context) error {
 
 	ctx, cancel := context.WithCancel(parent)
 
-	t.status(StatusChecking, "установка соединения")
+	t.status(StatusChecking, i18n.T("Establishing connection"))
 	client, err := t.connect(ctx)
 	if err != nil {
 		cancel()
@@ -224,7 +217,7 @@ func (t *Tunnel) Start(parent context.Context) error {
 	if err != nil {
 		client.Close()
 		cancel()
-		e := fmt.Errorf("не удалось занять локальный адрес %s: %w", t.cfg.LocalAddr(), err)
+		e := fmt.Errorf(i18n.T("Could not bind local address %s: %w"), t.cfg.LocalAddr(), err)
 		t.status(StatusError, e.Error())
 		return e
 	}
@@ -240,15 +233,18 @@ func (t *Tunnel) Start(parent context.Context) error {
 	t.total.Store(0)
 	t.emitStats()
 
+	go func() {
+		<-ctx.Done()
+		t.Stop()
+	}()
 	go t.acceptLoop(ctx, ln)
 	go t.monitor(ctx)
 
-	t.status(StatusActive, fmt.Sprintf("туннель активен, подключайте клиентов к %s", t.cfg.LocalAddr()))
+	t.status(StatusActive, fmt.Sprintf(i18n.T("Tunnel active; connect clients to %s"), t.cfg.LocalAddr()))
 	return nil
 }
 
-// Stop останавливает туннель: закрывает слушателя, принудительно разрывает уже
-// открытые соединения (закрытие слушателя их не рвёт) и закрывает SSH-соединение.
+// Stop closes the listener, active client connections, and the SSH connection.
 func (t *Tunnel) Stop() {
 	t.mu.Lock()
 	if !t.running {
@@ -278,16 +274,18 @@ func (t *Tunnel) Stop() {
 	}
 
 	t.emitStats()
-	t.status(StatusIdle, "туннель остановлен")
+	t.status(StatusIdle, i18n.T("Tunnel stopped"))
 }
 
-// connect устанавливает соединение с jump-сервером и проверяет, что через него
-// действительно открывается канал до целевого узла. Каждая стадия отчитывается в журнал
-// отдельно, поэтому по сообщению видно, что именно не сработало.
+// connect establishes a jump-server connection and verifies a channel to the destination.
+// Each stage is logged separately to identify failures.
 func (t *Tunnel) connect(ctx context.Context) (*ssh.Client, error) {
-	auth, err := buildAuth(t.cfg.Auth)
+	auth, authResource, err := buildAuth(t.cfg.Auth)
 	if err != nil {
 		return nil, err
+	}
+	if authResource != nil {
+		defer authResource.Close()
 	}
 	hostKey, err := newHostKeyCallback(t.cfg.VerifyHostKey, t.cfg.KnownHostsFile, t.cfg.HostKeyPrompt, t.logf)
 	if err != nil {
@@ -295,14 +293,14 @@ func (t *Tunnel) connect(ctx context.Context) (*ssh.Client, error) {
 	}
 
 	jumpAddr := t.cfg.JumpAddr()
-	t.logf("1/3 TCP-соединение с jump-сервером %s", jumpAddr)
+	t.logf(i18n.T("1/3 TCP connection to jump server %s"), jumpAddr)
 	dialer := net.Dialer{Timeout: t.cfg.ConnectTimeout}
 	raw, err := dialer.DialContext(ctx, "tcp", jumpAddr)
 	if err != nil {
-		return nil, fmt.Errorf("jump-сервер %s недостижим по TCP: %w", jumpAddr, err)
+		return nil, fmt.Errorf(i18n.T("Jump server %s is unreachable via TCP: %w"), jumpAddr, err)
 	}
 
-	t.logf("2/3 SSH-рукопожатие и аутентификация пользователя %s способом %q", t.cfg.JumpUser, t.cfg.Auth.Method)
+	t.logf(i18n.T("2/3 SSH handshake and authentication for %s using %q"), t.cfg.JumpUser, t.cfg.Auth.Method)
 	_ = raw.SetDeadline(time.Now().Add(t.cfg.ConnectTimeout))
 	sshConn, chans, reqs, err := ssh.NewClientConn(raw, jumpAddr, &ssh.ClientConfig{
 		User:            t.cfg.JumpUser,
@@ -312,27 +310,27 @@ func (t *Tunnel) connect(ctx context.Context) (*ssh.Client, error) {
 	})
 	if err != nil {
 		_ = raw.Close()
-		return nil, fmt.Errorf("SSH-соединение с jump-сервером %s не установлено: %w", jumpAddr, err)
+		return nil, fmt.Errorf(i18n.T("SSH connection to jump server %s failed: %w"), jumpAddr, err)
 	}
 	_ = raw.SetDeadline(time.Time{})
 	client := ssh.NewClient(sshConn, chans, reqs)
 
 	targetAddr := t.cfg.TargetAddr()
-	t.logf("3/3 проверка канала до целевого узла %s через jump-сервер", targetAddr)
+	t.logf(i18n.T("3/3 checking channel to target %s through jump server"), targetAddr)
 	probeCtx, cancel := context.WithTimeout(ctx, t.cfg.ConnectTimeout)
 	defer cancel()
 	probe, err := client.DialContext(probeCtx, "tcp", targetAddr)
 	if err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("jump-сервер не смог открыть соединение с %s: %w", targetAddr, err)
+		return nil, fmt.Errorf(i18n.T("Jump server did not open a channel to %s: %w"), targetAddr, err)
 	}
 	_ = probe.Close()
 
-	t.logf("соединение установлено: %s доступен через %s", targetAddr, jumpAddr)
+	t.logf(i18n.T("Connection established: %s is reachable through %s"), targetAddr, jumpAddr)
 	return client, nil
 }
 
-// acceptLoop принимает локальные подключения и отдаёт каждое в отдельную горутину.
+// acceptLoop accepts local connections and handles each in a separate goroutine.
 func (t *Tunnel) acceptLoop(ctx context.Context, ln net.Listener) {
 	for {
 		local, err := ln.Accept()
@@ -340,16 +338,15 @@ func (t *Tunnel) acceptLoop(ctx context.Context, ln net.Listener) {
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return
 			}
-			t.logf("ошибка приёма локального подключения: %v", err)
+			t.logf(i18n.T("Could not accept a local connection: %v"), err)
 			continue
 		}
 		go t.handle(ctx, local)
 	}
 }
 
-// handle обслуживает одно локальное подключение: открывает канал до целевого узла
-// через jump-сервер и перекачивает данные в обе стороны. Любая ошибка остаётся
-// внутри этой горутины и попадает в журнал, процесс от неё не падает.
+// handle opens a destination channel for one local connection and transfers data in both directions.
+// Errors are logged within this goroutine and do not terminate the process.
 func (t *Tunnel) handle(ctx context.Context, local net.Conn) {
 	id := t.total.Add(1)
 	t.track(local)
@@ -362,7 +359,7 @@ func (t *Tunnel) handle(ctx context.Context, local net.Conn) {
 
 	client := t.currentClient()
 	if client == nil {
-		t.logf("подключение #%d отклонено: нет связи с jump-сервером", id)
+		t.logf(i18n.T("Connection %d was rejected: no connection to the jump server"), id)
 		return
 	}
 
@@ -370,7 +367,7 @@ func (t *Tunnel) handle(ctx context.Context, local net.Conn) {
 	defer cancel()
 	remote, err := client.DialContext(dialCtx, "tcp", t.cfg.TargetAddr())
 	if err != nil {
-		t.logf("подключение #%d: jump-сервер не открыл канал до %s: %v", id, t.cfg.TargetAddr(), err)
+		t.logf(i18n.T("Connection %d: jump server could not open a channel to %s: %v"), id, t.cfg.TargetAddr(), err)
 		return
 	}
 	t.track(remote)
@@ -379,13 +376,12 @@ func (t *Tunnel) handle(ctx context.Context, local net.Conn) {
 		_ = remote.Close()
 	}()
 
-	t.logf("подключение #%d открыто: %s -> %s", id, local.RemoteAddr(), t.cfg.TargetAddr())
+	t.logf(i18n.T("Connection %d opened: %s -> %s"), id, local.RemoteAddr(), t.cfg.TargetAddr())
 	up, down := pipe(local, remote)
-	t.logf("подключение #%d закрыто: отправлено %d Б, получено %d Б", id, up, down)
+	t.logf(i18n.T("Connection %d closed: sent %d bytes, received %d bytes"), id, up, down)
 }
 
-// pipe перекачивает данные между локальным подключением и каналом до целевого узла
-// в обе стороны и возвращает объёмы переданных байт.
+// pipe transfers data in both directions and returns the byte counts.
 func pipe(local, remote net.Conn) (up, down int64) {
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -403,8 +399,7 @@ func pipe(local, remote net.Conn) (up, down int64) {
 	return up, down
 }
 
-// closeWrite закрывает только направление записи, если соединение это умеет,
-// чтобы противоположная сторона получила EOF, а не ждала данных до таймаута.
+// closeWrite closes only the write direction when supported, so the peer receives EOF.
 func closeWrite(c net.Conn) {
 	type closeWriter interface{ CloseWrite() error }
 	if cw, ok := c.(closeWriter); ok {
@@ -414,9 +409,7 @@ func closeWrite(c net.Conn) {
 	_ = c.Close()
 }
 
-// monitor следит за живостью SSH-соединения: ждёт его завершения и параллельно
-// посылает keepalive-запросы. Разрыв фиксируется сразу, а не обнаруживается
-// случайным клиентом через неопределённое время.
+// monitor watches the SSH connection and sends keepalive requests while waiting for it to close.
 func (t *Tunnel) monitor(ctx context.Context) {
 	for {
 		client := t.currentClient()
@@ -440,8 +433,7 @@ func (t *Tunnel) monitor(ctx context.Context) {
 				ticker.Stop()
 				break watch
 			case <-ticker.C:
-				// Ответ "не поддерживается" — тоже признак живого соединения,
-				// поэтому проверяется только транспортная ошибка.
+				// An unsupported response still indicates a live connection; check only transport errors.
 				if _, _, err := client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
 					reason = err
 					ticker.Stop()
@@ -454,12 +446,12 @@ func (t *Tunnel) monitor(ctx context.Context) {
 			return
 		}
 
-		t.logf("связь с jump-сервером потеряна: %v", reason)
+		t.logf(i18n.T("Connection to the jump server was lost: %v"), reason)
 		_ = client.Close()
 		t.setClient(nil)
 
 		if !t.cfg.AutoReconnect {
-			t.status(StatusError, "связь с jump-сервером потеряна, туннель остановлен")
+			t.status(StatusError, i18n.T("Connection to the jump server was lost; tunnel stopped"))
 			t.Stop()
 			return
 		}
@@ -469,13 +461,12 @@ func (t *Tunnel) monitor(ctx context.Context) {
 	}
 }
 
-// reconnect восстанавливает связь с jump-сервером с нарастающей паузой между попытками.
-// Локальный слушатель при этом не закрывается: клиенты, подключившиеся в момент обрыва,
-// получают отказ с записью в журнал, а после восстановления связи обслуживание продолжается.
+// reconnect restores the jump connection with an increasing delay between attempts.
+// The local listener remains open while reconnecting.
 func (t *Tunnel) reconnect(ctx context.Context) bool {
 	delay := time.Second
 	for attempt := 1; ; attempt++ {
-		t.status(StatusReconnecting, fmt.Sprintf("переподключение, попытка %d", attempt))
+		t.status(StatusReconnecting, fmt.Sprintf(i18n.T("Reconnecting, attempt %d"), attempt))
 		select {
 		case <-ctx.Done():
 			return false
@@ -485,13 +476,13 @@ func (t *Tunnel) reconnect(ctx context.Context) bool {
 		client, err := t.connect(ctx)
 		if err == nil {
 			t.setClient(client)
-			t.status(StatusActive, fmt.Sprintf("связь восстановлена, туннель активен на %s", t.cfg.LocalAddr()))
+			t.status(StatusActive, fmt.Sprintf(i18n.T("Connection restored; tunnel is active on %s"), t.cfg.LocalAddr()))
 			return true
 		}
 		if ctx.Err() != nil {
 			return false
 		}
-		t.logf("попытка %d не удалась: %v", attempt, err)
+		t.logf(i18n.T("Attempt %d failed: %v"), attempt, err)
 
 		delay *= 2
 		if delay > 30*time.Second {
@@ -500,21 +491,21 @@ func (t *Tunnel) reconnect(ctx context.Context) bool {
 	}
 }
 
-// currentClient возвращает действующее SSH-соединение или nil, если связи нет.
+// currentClient returns the current SSH connection, or nil when disconnected.
 func (t *Tunnel) currentClient() *ssh.Client {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.client
 }
 
-// setClient заменяет действующее SSH-соединение.
+// setClient replaces the current SSH connection.
 func (t *Tunnel) setClient(c *ssh.Client) {
 	t.mu.Lock()
 	t.client = c
 	t.mu.Unlock()
 }
 
-// track запоминает открытое соединение, чтобы Stop мог его принудительно закрыть.
+// track registers a connection so Stop can close it.
 func (t *Tunnel) track(c io.Closer) {
 	t.mu.Lock()
 	if t.conns != nil {
@@ -523,7 +514,7 @@ func (t *Tunnel) track(c io.Closer) {
 	t.mu.Unlock()
 }
 
-// untrack убирает закрытое соединение из списка отслеживаемых.
+// untrack removes a closed connection from the tracked set.
 func (t *Tunnel) untrack(c io.Closer) {
 	t.mu.Lock()
 	if t.conns != nil {
@@ -532,14 +523,12 @@ func (t *Tunnel) untrack(c io.Closer) {
 	t.mu.Unlock()
 }
 
-// Stats возвращает текущие счётчики соединений.
+// Stats returns the current connection counters.
 func (t *Tunnel) Stats() Stats {
 	return Stats{Active: t.countLocal(), Total: t.total.Load()}
 }
 
-// countLocal считает открытые локальные подключения. В списке отслеживаемых лежат
-// обе половины каждого соединения, поэтому считаются только локальные TCP-подключения,
-// иначе одно подключение учитывалось бы дважды.
+// countLocal counts open local TCP connections, excluding their remote counterparts.
 func (t *Tunnel) countLocal() int {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -552,7 +541,7 @@ func (t *Tunnel) countLocal() int {
 	return n
 }
 
-// status сообщает интерфейсу новое состояние и дублирует сообщение в журнал.
+// status reports a new state to the interface and writes the message to the log.
 func (t *Tunnel) status(s Status, msg string) {
 	if t.cb.OnStatus != nil {
 		t.cb.OnStatus(s, msg)
@@ -560,14 +549,14 @@ func (t *Tunnel) status(s Status, msg string) {
 	t.logf("%s", msg)
 }
 
-// emitStats отдаёт интерфейсу обновлённые счётчики соединений.
+// emitStats sends updated connection counters to the interface.
 func (t *Tunnel) emitStats() {
 	if t.cb.OnStats != nil {
 		t.cb.OnStats(t.Stats())
 	}
 }
 
-// logf пишет строку в журнал интерфейса.
+// logf writes a formatted line to the interface log.
 func (t *Tunnel) logf(format string, args ...any) {
 	if t.cb.OnLog != nil {
 		t.cb.OnLog(fmt.Sprintf(format, args...))

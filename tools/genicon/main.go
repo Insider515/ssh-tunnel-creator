@@ -1,6 +1,5 @@
-// Команда genicon рисует иконку приложения в файл assets/icon.png.
-// Иконка генерируется кодом, чтобы её не приходилось держать бинарником в репозитории
-// и чтобы размер и цвета можно было поменять в одном месте.
+// Command genicon renders the application icon to assets/icon.png.
+// Generating it in code keeps the binary out of the repository and centralizes its design.
 package main
 
 import (
@@ -11,13 +10,13 @@ import (
 	"os"
 )
 
-// size — сторона квадратной иконки в пикселях.
+// size is the icon's square edge length in pixels.
 const size = 512
 
-// samples — кратность суперсэмплинга по каждой оси для сглаживания краёв.
+// samples is the supersampling factor per axis for edge antialiasing.
 const samples = 4
 
-// цвета иконки.
+// Icon colors.
 var (
 	bgTop   = color.NRGBA{R: 0x1d, G: 0x30, B: 0x57, A: 0xff}
 	bgDown  = color.NRGBA{R: 0x0b, G: 0x12, B: 0x22, A: 0xff}
@@ -25,7 +24,7 @@ var (
 	arrow   = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 )
 
-// main рисует иконку и записывает её в assets/icon.png.
+// main renders the icon and writes it to assets/icon.png.
 func main() {
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
 	for y := 0; y < size; y++ {
@@ -43,8 +42,7 @@ func main() {
 	}
 }
 
-// pixel считает итоговый цвет одного пикселя, усредняя несколько подпикселей.
-// Усреднение даёт сглаженные края скруглённого квадрата, кольца и стрелки.
+// pixel calculates a pixel's final color by averaging its subpixels.
 func pixel(px, py float64) color.NRGBA {
 	var r, g, b, a float64
 	step := 1.0 / float64(samples)
@@ -61,8 +59,8 @@ func pixel(px, py float64) color.NRGBA {
 	return color.NRGBA{R: uint8(r / n), G: uint8(g / n), B: uint8(b / n), A: uint8(a / n)}
 }
 
-// sample возвращает цвет иконки в точке с дробными координатами.
-// Слои накладываются снизу вверх: фон, кольцо-«тоннель», стрелка.
+// sample returns the icon color at fractional coordinates.
+// Layers are applied from bottom to top: background, tunnel ring, then arrow.
 func sample(x, y float64) color.NRGBA {
 	if !insideRoundedSquare(x, y, 24, 110) {
 		return color.NRGBA{}
@@ -77,15 +75,14 @@ func sample(x, y float64) color.NRGBA {
 	return c
 }
 
-// gradient задаёт вертикальную заливку фона от светлого верха к тёмному низу.
+// gradient returns the background's vertical gradient from light at the top to dark at the bottom.
 func gradient(y float64) color.NRGBA {
 	t := y / size
 	lerp := func(a, b uint8) uint8 { return uint8(float64(a) + (float64(b)-float64(a))*t) }
 	return color.NRGBA{R: lerp(bgTop.R, bgDown.R), G: lerp(bgTop.G, bgDown.G), B: lerp(bgTop.B, bgDown.B), A: 0xff}
 }
 
-// insideRoundedSquare сообщает, попадает ли точка внутрь скруглённого квадрата
-// с отступом margin от края изображения и радиусом скругления radius.
+// insideRoundedSquare reports whether a point is inside a rounded square with the given margin and radius.
 func insideRoundedSquare(x, y, margin, radius float64) bool {
 	minX, minY := margin, margin
 	maxX, maxY := size-margin, size-margin
@@ -98,14 +95,13 @@ func insideRoundedSquare(x, y, margin, radius float64) bool {
 	return dx*dx+dy*dy <= radius*radius
 }
 
-// insideRing сообщает, попадает ли точка в кольцо заданного радиуса и толщины.
+// insideRing reports whether a point is inside a ring with the given radius and thickness.
 func insideRing(x, y, cx, cy, radius, thickness float64) bool {
 	d := math.Hypot(x-cx, y-cy)
 	return d >= radius-thickness/2 && d <= radius+thickness/2
 }
 
-// insideArrow сообщает, попадает ли точка в горизонтальную стрелку,
-// проходящую через центр иконки слева направо.
+// insideArrow reports whether a point is inside the horizontal arrow through the icon's center.
 func insideArrow(x, y float64) bool {
 	const (
 		shaftLeft  = 120.0

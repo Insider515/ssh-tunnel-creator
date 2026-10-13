@@ -15,33 +15,32 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// testUser и testPass — учётные данные встроенного jump-сервера в тестах.
+// testUser and testPass are credentials for the embedded jump server.
 const (
 	testUser = "tester"
 	testPass = "secret"
 )
 
-// newTestSigner создаёт хост-ключ для встроенного SSH-сервера.
+// newTestSigner creates a host key for the embedded SSH server.
 func newTestSigner(t *testing.T) ssh.Signer {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("не удалось сгенерировать ключ: %v", err)
+		t.Fatalf("could not generate host key: %v", err)
 	}
 	signer, err := ssh.NewSignerFromKey(priv)
 	if err != nil {
-		t.Fatalf("не удалось создать подписывающего: %v", err)
+		t.Fatalf("could not create signer: %v", err)
 	}
 	return signer
 }
 
-// startEchoServer поднимает TCP-сервер, который возвращает обратно всё полученное.
-// Играет роль целевого сервера.
+// startEchoServer starts a TCP server that echoes all received data.
 func startEchoServer(t *testing.T) (host string, port int) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("не удалось поднять echo-сервер: %v", err)
+		t.Fatalf("could not start echo server: %v", err)
 	}
 	t.Cleanup(func() { ln.Close() })
 	go func() {
@@ -60,8 +59,8 @@ func startEchoServer(t *testing.T) (host string, port int) {
 	return addr.IP.String(), addr.Port
 }
 
-// startJumpServer поднимает минимальный SSH-сервер, который принимает пароль
-// и выполняет запросы direct-tcpip — ровно то, на чём держится туннель.
+// startJumpServer starts a minimal SSH server that authenticates with a password
+// and handles direct-tcpip requests.
 func startJumpServer(t *testing.T) (host string, port int) {
 	t.Helper()
 	cfg := &ssh.ServerConfig{
@@ -69,14 +68,14 @@ func startJumpServer(t *testing.T) (host string, port int) {
 			if c.User() == testUser && string(pass) == testPass {
 				return nil, nil
 			}
-			return nil, errors.New("неверный пароль")
+			return nil, errors.New("invalid password")
 		},
 	}
 	cfg.AddHostKey(newTestSigner(t))
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("не удалось поднять jump-сервер: %v", err)
+		t.Fatalf("could not start jump server: %v", err)
 	}
 	t.Cleanup(func() { ln.Close() })
 
@@ -93,8 +92,8 @@ func startJumpServer(t *testing.T) (host string, port int) {
 	return addr.IP.String(), addr.Port
 }
 
-// serveJump обслуживает одно соединение встроенного jump-сервера:
-// аутентифицирует клиента и открывает запрошенные каналы direct-tcpip.
+// serveJump handles one embedded jump-server connection, authenticating the client
+// and opening requested direct-tcpip channels.
 func serveJump(c net.Conn, cfg *ssh.ServerConfig) {
 	conn, chans, reqs, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
@@ -106,7 +105,7 @@ func serveJump(c net.Conn, cfg *ssh.ServerConfig) {
 
 	for nc := range chans {
 		if nc.ChannelType() != "direct-tcpip" {
-			_ = nc.Reject(ssh.UnknownChannelType, "поддерживается только direct-tcpip")
+			_ = nc.Reject(ssh.UnknownChannelType, "only direct-tcpip is supported")
 			continue
 		}
 		var req struct {
@@ -116,7 +115,7 @@ func serveJump(c net.Conn, cfg *ssh.ServerConfig) {
 			OriginPort uint32
 		}
 		if err := ssh.Unmarshal(nc.ExtraData(), &req); err != nil {
-			_ = nc.Reject(ssh.ConnectionFailed, "некорректный запрос")
+			_ = nc.Reject(ssh.ConnectionFailed, "invalid request")
 			continue
 		}
 		target := net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port)))
@@ -142,18 +141,18 @@ func serveJump(c net.Conn, cfg *ssh.ServerConfig) {
 	}
 }
 
-// freePort находит свободный локальный TCP-порт.
+// freePort finds an available local TCP port.
 func freePort(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("не удалось найти свободный порт: %v", err)
+		t.Fatalf("could not find an available port: %v", err)
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
-// testConfig собирает параметры туннеля для тестов.
+// testConfig creates tunnel settings for tests.
 func testConfig(localPort int, jumpHost string, jumpPort int, targetHost string, targetPort int) Config {
 	return Config{
 		LocalPort:  localPort,
@@ -172,8 +171,7 @@ func testConfig(localPort int, jumpHost string, jumpPort int, targetHost string,
 	}
 }
 
-// TestTunnelForwardsData проверяет сквозную работу: данные, записанные в локальный порт,
-// доходят до целевого сервера через jump-сервер и возвращаются обратно.
+// TestTunnelForwardsData verifies that data passes through the jump server to the destination and back.
 func TestTunnelForwardsData(t *testing.T) {
 	echoHost, echoPort := startEchoServer(t)
 	jumpHost, jumpPort := startJumpServer(t)
@@ -181,105 +179,101 @@ func TestTunnelForwardsData(t *testing.T) {
 
 	tun := New(testConfig(localPort, jumpHost, jumpPort, echoHost, echoPort), Callbacks{})
 	if err := tun.Start(context.Background()); err != nil {
-		t.Fatalf("туннель не запустился: %v", err)
+		t.Fatalf("could not start tunnel: %v", err)
 	}
 	defer tun.Stop()
 
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)), 3*time.Second)
 	if err != nil {
-		t.Fatalf("не удалось подключиться к локальному порту туннеля: %v", err)
+		t.Fatalf("could not connect to the tunnel's local port: %v", err)
 	}
 	defer conn.Close()
 
-	want := "проверка связи"
+	want := "connection test"
 	if _, err := conn.Write([]byte(want)); err != nil {
-		t.Fatalf("запись в туннель не удалась: %v", err)
+		t.Fatalf("could not write to tunnel: %v", err)
 	}
 	buf := make([]byte, len(want))
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		t.Fatalf("чтение из туннеля не удалось: %v", err)
+		t.Fatalf("could not read from tunnel: %v", err)
 	}
 	if string(buf) != want {
-		t.Fatalf("через туннель пришло %q, ожидалось %q", buf, want)
+		t.Fatalf("received %q through tunnel, want %q", buf, want)
 	}
 
 	if got := tun.Stats().Total; got != 1 {
-		t.Fatalf("счётчик соединений равен %d, ожидался 1", got)
+		t.Fatalf("connection count is %d, want 1", got)
 	}
 }
 
-// TestStartDoesNotOpenPortWhenTargetUnreachable проверяет главное исправление
-// относительно Electron-версии: если целевой узел недоступен, запуск завершается ошибкой
-// и локальный порт не занимается, а не сообщает об "активном туннеле".
+// TestStartDoesNotOpenPortWhenTargetUnreachable verifies startup fails without
+// binding the local port when the destination is unreachable.
 func TestStartDoesNotOpenPortWhenTargetUnreachable(t *testing.T) {
 	jumpHost, jumpPort := startJumpServer(t)
-	deadPort := freePort(t) // порт, на котором никто не слушает
+	deadPort := freePort(t) // No service is listening on this port.
 	localPort := freePort(t)
 
 	tun := New(testConfig(localPort, jumpHost, jumpPort, "127.0.0.1", deadPort), Callbacks{})
 	err := tun.Start(context.Background())
 	if err == nil {
 		tun.Stop()
-		t.Fatal("запуск завершился успехом, хотя целевой узел недоступен")
+		t.Fatal("startup succeeded although the destination is unreachable")
 	}
-	if !strings.Contains(err.Error(), "не смог открыть соединение") {
-		t.Fatalf("ошибка не указывает на недоступность целевого узла: %v", err)
+	if !strings.Contains(err.Error(), "did not open a channel") {
+		t.Fatalf("error does not indicate an unreachable destination: %v", err)
 	}
 	if tun.Running() {
-		t.Fatal("туннель считается запущенным после неудачной проверки")
+		t.Fatal("tunnel is marked as running after validation failed")
 	}
 
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)))
 	if err != nil {
-		t.Fatalf("локальный порт %d остался занят после неудачного запуска: %v", localPort, err)
+		t.Fatalf("local port %d remains busy after failed startup: %v", localPort, err)
 	}
 	ln.Close()
 }
 
-// TestCheckDetectsWrongPassword проверяет, что ошибка аутентификации выявляется
-// на этапе проверки, а не при первом подключении клиента.
+// TestCheckDetectsWrongPassword verifies that authentication errors are caught during checking.
 func TestCheckDetectsWrongPassword(t *testing.T) {
 	echoHost, echoPort := startEchoServer(t)
 	jumpHost, jumpPort := startJumpServer(t)
 
 	cfg := testConfig(freePort(t), jumpHost, jumpPort, echoHost, echoPort)
-	cfg.Auth.Password = "неверный"
+	cfg.Auth.Password = "incorrect"
 	tun := New(cfg, Callbacks{})
 
 	err := tun.Check(context.Background())
 	if err == nil {
-		t.Fatal("проверка прошла с неверным паролем")
+		t.Fatal("connection check passed with an incorrect password")
 	}
-	if !strings.Contains(err.Error(), "не установлено") {
-		t.Fatalf("ошибка не указывает на неудачу SSH-соединения: %v", err)
+	if !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("error does not indicate an SSH connection failure: %v", err)
 	}
 }
 
-// TestCheckDetectsUnreachableJump проверяет, что недоступный jump-сервер
-// распознаётся отдельно от остальных причин.
+// TestCheckDetectsUnreachableJump verifies that an unreachable jump server is reported explicitly.
 func TestCheckDetectsUnreachableJump(t *testing.T) {
 	cfg := testConfig(freePort(t), "127.0.0.1", freePort(t), "127.0.0.1", 22)
 	tun := New(cfg, Callbacks{})
 
 	err := tun.Check(context.Background())
 	if err == nil {
-		t.Fatal("проверка прошла при недоступном jump-сервере")
+		t.Fatal("connection check passed with an unreachable jump server")
 	}
-	if !strings.Contains(err.Error(), "недостижим по TCP") {
-		t.Fatalf("ошибка не указывает на недоступность jump-сервера: %v", err)
+	if !strings.Contains(err.Error(), "is unreachable via TCP") {
+		t.Fatalf("error does not indicate an unreachable jump server: %v", err)
 	}
 }
 
-// TestCheckDetectsBusyLocalPort проверяет, что занятый локальный порт
-// сообщается явно, а не приводит к молчаливому отказу.
+// TestCheckDetectsBusyLocalPort verifies that an occupied local port is reported explicitly.
 func TestCheckDetectsBusyLocalPort(t *testing.T) {
 	echoHost, echoPort := startEchoServer(t)
 	jumpHost, jumpPort := startJumpServer(t)
 
 	busy, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("не удалось занять порт: %v", err)
+		t.Fatalf("could not occupy a local port: %v", err)
 	}
 	defer busy.Close()
 	busyPort := busy.Addr().(*net.TCPAddr).Port
@@ -287,46 +281,44 @@ func TestCheckDetectsBusyLocalPort(t *testing.T) {
 	tun := New(testConfig(busyPort, jumpHost, jumpPort, echoHost, echoPort), Callbacks{})
 	err = tun.Check(context.Background())
 	if err == nil {
-		t.Fatal("проверка прошла при занятом локальном порте")
+		t.Fatal("connection check passed with an occupied local port")
 	}
-	if !strings.Contains(err.Error(), "занят") {
-		t.Fatalf("ошибка не указывает на занятый порт: %v", err)
+	if !strings.Contains(err.Error(), "is busy") {
+		t.Fatalf("error does not indicate that the port is busy: %v", err)
 	}
 }
 
-// TestValidateRejectsBadFields проверяет, что незаполненные и нечисловые параметры
-// отвергаются до обращения к сети.
+// TestValidateRejectsBadFields verifies that invalid parameters are rejected before network access.
 func TestValidateRejectsBadFields(t *testing.T) {
 	cases := []struct {
 		name string
 		cfg  Config
 		want string
 	}{
-		{"нулевой локальный порт", Config{LocalPort: 0}, "локальный порт"},
-		{"нет адреса jump", Config{LocalPort: 8080}, "jump-сервера"},
-		{"нет пользователя", Config{LocalPort: 8080, JumpHost: "h", JumpPort: 22}, "имя пользователя"},
-		{"нет целевого адреса", Config{LocalPort: 8080, JumpHost: "h", JumpPort: 22, JumpUser: "u"}, "целевого сервера"},
+		{"zero local port", Config{LocalPort: 0}, "Local port"},
+		{"missing jump address", Config{LocalPort: 8080}, "Jump server"},
+		{"missing username", Config{LocalPort: 8080, JumpHost: "h", JumpPort: 22}, "username"},
+		{"missing target address", Config{LocalPort: 8080, JumpHost: "h", JumpPort: 22, JumpUser: "u"}, "Target server"},
 		{
-			"неизвестный способ аутентификации",
+			"unknown authentication method",
 			Config{LocalPort: 8080, JumpHost: "h", JumpPort: 22, JumpUser: "u", TargetHost: "t", TargetPort: 22},
-			"способ аутентификации",
+			"authentication method",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			err := c.cfg.Validate()
 			if err == nil {
-				t.Fatal("ошибка не возвращена")
+				t.Fatal("expected an error")
 			}
 			if !strings.Contains(err.Error(), c.want) {
-				t.Fatalf("ошибка %q не содержит %q", err, c.want)
+				t.Fatalf("error %q does not contain %q", err, c.want)
 			}
 		})
 	}
 }
 
-// TestStopClosesActiveConnections проверяет, что остановка разрывает уже открытые
-// соединения: закрытие слушателя само их не рвёт.
+// TestStopClosesActiveConnections verifies that stopping the tunnel closes active connections.
 func TestStopClosesActiveConnections(t *testing.T) {
 	echoHost, echoPort := startEchoServer(t)
 	jumpHost, jumpPort := startJumpServer(t)
@@ -334,90 +326,146 @@ func TestStopClosesActiveConnections(t *testing.T) {
 
 	tun := New(testConfig(localPort, jumpHost, jumpPort, echoHost, echoPort), Callbacks{})
 	if err := tun.Start(context.Background()); err != nil {
-		t.Fatalf("туннель не запустился: %v", err)
+		t.Fatalf("could not start tunnel: %v", err)
 	}
 
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)), 3*time.Second)
 	if err != nil {
-		t.Fatalf("не удалось подключиться к туннелю: %v", err)
+		t.Fatalf("could not connect to tunnel: %v", err)
 	}
 	defer conn.Close()
 	if _, err := conn.Write([]byte("x")); err != nil {
-		t.Fatalf("запись не удалась: %v", err)
+		t.Fatalf("write failed: %v", err)
 	}
 	buf := make([]byte, 1)
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		t.Fatalf("эхо не получено: %v", err)
+		t.Fatalf("no echo response received: %v", err)
 	}
 
 	tun.Stop()
 
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := conn.Read(buf); err == nil {
-		t.Fatal("соединение осталось живым после остановки туннеля")
+		t.Fatal("connection remained open after the tunnel stopped")
 	}
 	if got := tun.Stats().Active; got != 0 {
-		t.Fatalf("после остановки активных соединений %d, ожидалось 0", got)
+		t.Fatalf("active connection count after stopping is %d, want 0", got)
 	}
 }
 
-// TestKeyAuthReportsMissingFile проверяет, что отсутствующий файл ключа
-// объясняется явно, а не превращается в общую ошибку рукопожатия.
+// TestParentContextCancellationStopsTunnel verifies that parent-context cancellation closes
+// the listener, SSH connection, and active client connections.
+func TestParentContextCancellationStopsTunnel(t *testing.T) {
+	echoHost, echoPort := startEchoServer(t)
+	jumpHost, jumpPort := startJumpServer(t)
+	localPort := freePort(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tun := New(testConfig(localPort, jumpHost, jumpPort, echoHost, echoPort), Callbacks{})
+	if err := tun.Start(ctx); err != nil {
+		t.Fatalf("could not start tunnel: %v", err)
+	}
+
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)), 3*time.Second)
+	if err != nil {
+		t.Fatalf("could not connect to tunnel: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("x")); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	buf := make([]byte, 1)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		t.Fatalf("no echo response received: %v", err)
+	}
+
+	cancel()
+	deadline := time.Now().Add(5 * time.Second)
+	var ln net.Listener
+	for time.Now().Before(deadline) {
+		ln, err = net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)))
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if ln == nil {
+		t.Fatalf("local port was not released after context cancellation: %v", err)
+	}
+	_ = ln.Close()
+
+	deadline = time.Now().Add(5 * time.Second)
+	for tun.Stats().Active != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if tun.Running() {
+		t.Fatal("tunnel remained running after context cancellation")
+	}
+	if got := tun.Stats().Active; got != 0 {
+		t.Fatalf("active connection count after cancellation is %d, want 0", got)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Read(buf); err == nil {
+		t.Fatal("client connection remained open after context cancellation")
+	}
+}
+
+// TestKeyAuthReportsMissingFile verifies that a missing key file has a specific error.
 func TestKeyAuthReportsMissingFile(t *testing.T) {
-	_, err := buildAuth(AuthConfig{Method: AuthKey, KeyPath: "/нет/такого/файла"})
+	_, _, err := buildAuth(AuthConfig{Method: AuthKey, KeyPath: "/path/that/does/not/exist"})
 	if err == nil {
-		t.Fatal("ошибка не возвращена")
+		t.Fatal("expected an error")
 	}
-	if !strings.Contains(err.Error(), "не удалось прочитать файл ключа") {
-		t.Fatalf("неожиданная ошибка: %v", err)
+	if !strings.Contains(err.Error(), "could not be read") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-// TestPasswordAuthRequiresPassword проверяет, что пустой пароль отсекается до соединения.
+// TestPasswordAuthRequiresPassword verifies that an empty password is rejected before connecting.
 func TestPasswordAuthRequiresPassword(t *testing.T) {
-	_, err := buildAuth(AuthConfig{Method: AuthPassword})
-	if err == nil || !strings.Contains(err.Error(), "пароль не задан") {
-		t.Fatalf("неожиданный результат: %v", err)
+	_, _, err := buildAuth(AuthConfig{Method: AuthPassword})
+	if err == nil || !strings.Contains(err.Error(), "Password is not set") {
+		t.Fatalf("unexpected result: %v", err)
 	}
 }
 
-// TestHostKeyMismatchIsRejected проверяет, что несовпадение ключа хоста
-// с сохранённым ранее приводит к отказу, а не к молчаливому доверию.
+// TestHostKeyMismatchIsRejected verifies that a changed host key is rejected.
 func TestHostKeyMismatchIsRejected(t *testing.T) {
 	dir := t.TempDir()
 	file := dir + "/known_hosts"
 
 	stored := newTestSigner(t)
 	if err := ensureFile(file); err != nil {
-		t.Fatalf("не удалось создать файл: %v", err)
+		t.Fatalf("could not create file: %v", err)
 	}
 	if err := appendKnownHost(file, "127.0.0.1:2222", stored.PublicKey()); err != nil {
-		t.Fatalf("не удалось записать ключ: %v", err)
+		t.Fatalf("could not write host key: %v", err)
 	}
 
 	cb, err := newHostKeyCallback(true, file, nil, func(string, ...any) {})
 	if err != nil {
-		t.Fatalf("не удалось построить проверку: %v", err)
+		t.Fatalf("could not create host-key verifier: %v", err)
 	}
 
 	other := newTestSigner(t)
 	addr := &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 2222}
 	err = cb("127.0.0.1:2222", addr, other.PublicKey())
 	if err == nil {
-		t.Fatal("подменённый ключ хоста принят")
+		t.Fatal("changed host key was accepted")
 	}
-	if !strings.Contains(err.Error(), "не совпадает") {
-		t.Fatalf("неожиданная ошибка: %v", err)
+	if !strings.Contains(err.Error(), "differs from the previously saved key") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if err := cb("127.0.0.1:2222", addr, stored.PublicKey()); err != nil {
-		t.Fatalf("сохранённый ключ отвергнут: %v", err)
+		t.Fatalf("saved host key was rejected: %v", err)
 	}
 }
 
-// TestHostKeyUnknownRequiresConfirmation проверяет, что незнакомый ключ хоста
-// без подтверждения оператора не принимается, а после подтверждения запоминается.
+// TestHostKeyUnknownRequiresConfirmation verifies that new host keys require confirmation and are saved.
 func TestHostKeyUnknownRequiresConfirmation(t *testing.T) {
 	dir := t.TempDir()
 	file := dir + "/known_hosts"
@@ -426,34 +474,33 @@ func TestHostKeyUnknownRequiresConfirmation(t *testing.T) {
 
 	deny, err := newHostKeyCallback(true, file, func(string, string, string) bool { return false }, func(string, ...any) {})
 	if err != nil {
-		t.Fatalf("не удалось построить проверку: %v", err)
+		t.Fatalf("could not create host-key verifier: %v", err)
 	}
 	if err := deny("127.0.0.1:2222", addr, signer.PublicKey()); err == nil {
-		t.Fatal("неподтверждённый ключ принят")
+		t.Fatal("unconfirmed host key was accepted")
 	}
 
 	allow, err := newHostKeyCallback(true, file, func(string, string, string) bool { return true }, func(string, ...any) {})
 	if err != nil {
-		t.Fatalf("не удалось построить проверку: %v", err)
+		t.Fatalf("could not create host-key verifier: %v", err)
 	}
 	if err := allow("127.0.0.1:2222", addr, signer.PublicKey()); err != nil {
-		t.Fatalf("подтверждённый ключ отвергнут: %v", err)
+		t.Fatalf("confirmed host key was rejected: %v", err)
 	}
 
 	again, err := newHostKeyCallback(true, file, func(string, string, string) bool {
-		t.Fatal("ключ не был запомнён: оператора спросили повторно")
+		t.Fatal("host key was not remembered; the operator was prompted again")
 		return false
 	}, func(string, ...any) {})
 	if err != nil {
-		t.Fatalf("не удалось построить проверку: %v", err)
+		t.Fatalf("could not create host-key verifier: %v", err)
 	}
 	if err := again("127.0.0.1:2222", addr, signer.PublicKey()); err != nil {
-		t.Fatalf("запомненный ключ отвергнут: %v", err)
+		t.Fatalf("remembered host key was rejected: %v", err)
 	}
 }
 
-// TestReconnectAfterJumpLoss проверяет, что обрыв связи с jump-сервером обнаруживается
-// и при включённом автопереподключении туннель восстанавливается без перезапуска вручную.
+// TestReconnectAfterJumpLoss verifies that automatic reconnect restores a lost jump connection.
 func TestReconnectAfterJumpLoss(t *testing.T) {
 	echoHost, echoPort := startEchoServer(t)
 
@@ -462,19 +509,19 @@ func TestReconnectAfterJumpLoss(t *testing.T) {
 			if c.User() == testUser && string(pass) == testPass {
 				return nil, nil
 			}
-			return nil, errors.New("неверный пароль")
+			return nil, errors.New("invalid password")
 		},
 	}
 	cfg.AddHostKey(newTestSigner(t))
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("не удалось поднять jump-сервер: %v", err)
+		t.Fatalf("could not start jump server: %v", err)
 	}
 	defer ln.Close()
 	jumpAddr := ln.Addr().(*net.TCPAddr)
 
-	// Сохраняем ссылки на принятые соединения, чтобы оборвать их принудительно.
+	// Keep accepted connections so the test can close them explicitly.
 	accepted := make(chan net.Conn, 8)
 	go func() {
 		for {
@@ -501,16 +548,16 @@ func TestReconnectAfterJumpLoss(t *testing.T) {
 	}})
 
 	if err := tun.Start(context.Background()); err != nil {
-		t.Fatalf("туннель не запустился: %v", err)
+		t.Fatalf("could not start tunnel: %v", err)
 	}
 	defer tun.Stop()
 
-	// Рвём соединение, которое туннель установил с jump-сервером.
+	// Close the connection established by the tunnel to the jump server.
 	select {
 	case c := <-accepted:
 		c.Close()
 	case <-time.After(3 * time.Second):
-		t.Fatal("jump-сервер не получил соединения от туннеля")
+		t.Fatal("jump server did not receive a connection from the tunnel")
 	}
 
 	deadline := time.After(15 * time.Second)
@@ -525,26 +572,26 @@ func TestReconnectAfterJumpLoss(t *testing.T) {
 				goto restored
 			}
 		case <-deadline:
-			t.Fatalf("туннель не восстановился: переподключение замечено=%v", sawReconnecting)
+			t.Fatalf("tunnel did not reconnect: reconnecting state observed=%v", sawReconnecting)
 		}
 	}
 
 restored:
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(localPort)), 3*time.Second)
 	if err != nil {
-		t.Fatalf("после восстановления подключение не прошло: %v", err)
+		t.Fatalf("connection failed after recovery: %v", err)
 	}
 	defer conn.Close()
-	msg := []byte("после обрыва")
+	msg := []byte("after reconnect")
 	if _, err := conn.Write(msg); err != nil {
-		t.Fatalf("запись не удалась: %v", err)
+		t.Fatalf("write failed: %v", err)
 	}
 	buf := make([]byte, len(msg))
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		t.Fatalf("эхо после восстановления не получено: %v", err)
+		t.Fatalf("no echo response received after recovery: %v", err)
 	}
 	if string(buf) != string(msg) {
-		t.Fatalf("получено %q, ожидалось %q", buf, msg)
+		t.Fatalf("received %q, want %q", buf, msg)
 	}
 }

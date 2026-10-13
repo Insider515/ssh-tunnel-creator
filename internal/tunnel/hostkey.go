@@ -9,20 +9,19 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+	"sshtunnel/internal/i18n"
 )
 
-// HostKeyPrompt спрашивает оператора, доверять ли ранее не встречавшемуся ключу хоста.
-// Возвращает true, если оператор подтвердил ключ.
+// HostKeyPrompt asks whether to trust a host key that has not been seen before.
 type HostKeyPrompt func(host, keyType, fingerprint string) bool
 
-// newHostKeyCallback строит проверку ключа jump-сервера.
-// Известные ключи читаются из ~/.ssh/known_hosts и из собственного файла приложения.
-// Несовпадение с сохранённым ключом — жёсткий отказ (признак подмены сервера).
-// Ранее не встречавшийся ключ выносится на подтверждение оператору и после согласия
-// дописывается в файл приложения; файл known_hosts пользователя приложение не меняет.
+// newHostKeyCallback builds host-key verification for the jump server.
+// It reads known keys from ~/.ssh/known_hosts and the application's own file.
+// A mismatch with a saved key is rejected; a new key requires operator confirmation.
+// Confirmed keys are appended to the application file, never the user's known_hosts.
 func newHostKeyCallback(verify bool, appFile string, prompt HostKeyPrompt, logf func(string, ...any)) (ssh.HostKeyCallback, error) {
 	if !verify {
-		logf("ВНИМАНИЕ: проверка ключа хоста отключена, соединение уязвимо к подмене сервера")
+		logf(i18n.T("Host key checking is disabled; the connection is vulnerable to server impersonation"))
 		return ssh.InsecureIgnoreHostKey(), nil
 	}
 
@@ -39,7 +38,7 @@ func newHostKeyCallback(verify bool, appFile string, prompt HostKeyPrompt, logf 
 
 	base, err := knownhosts.New(files...)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось прочитать список известных хостов: %w", err)
+		return nil, fmt.Errorf(i18n.T("Could not read the known-hosts list: %w"), err)
 	}
 
 	return func(hostname string, remote net.Addr, key ssh.PublicKey) error {
@@ -55,43 +54,39 @@ func newHostKeyCallback(verify bool, appFile string, prompt HostKeyPrompt, logf 
 
 		fp := ssh.FingerprintSHA256(key)
 
-		// Want не пуст — для этого хоста уже сохранён другой ключ.
+		// Want is non-empty when a different key is already saved for this host.
 		if len(keyErr.Want) > 0 {
 			return fmt.Errorf(
-				"ключ хоста %s не совпадает с сохранённым ранее (получен %s %s). "+
-					"Это либо переустановка сервера, либо подмена соединения. "+
-					"Пока расхождение не объяснено, соединение не устанавливается",
+				i18n.T("Host key for %s differs from the previously saved key (received %s %s). The server may have been reinstalled or the connection may be under attack. The connection will not be established until this mismatch is explained."),
 				hostname, key.Type(), fp)
 		}
 
-		// Want пуст — хост встречается впервые.
+		// Want is empty when this host has not been seen before.
 		if prompt == nil || !prompt(hostname, key.Type(), fp) {
-			return fmt.Errorf("ключ хоста %s (%s %s) не подтверждён оператором", hostname, key.Type(), fp)
+			return fmt.Errorf(i18n.T("Host key %s (%s %s) was not trusted"), hostname, key.Type(), fp)
 		}
 		if err := appendKnownHost(appFile, hostname, key); err != nil {
-			logf("не удалось запомнить ключ хоста %s: %v", hostname, err)
+			logf(i18n.T("Could not remember host key %s: %v"), hostname, err)
 		} else {
-			logf("ключ хоста %s (%s %s) сохранён в %s", hostname, key.Type(), fp, appFile)
+			logf(i18n.T("Host key %s (%s %s) was saved to %s"), hostname, key.Type(), fp, appFile)
 		}
 		return nil
 	}, nil
 }
 
-// ensureFile создаёт файл и его каталог, если их нет.
-// Нужно потому, что knownhosts.New возвращает ошибку на отсутствующий файл.
+// ensureFile creates the file and its parent directory when needed.
 func ensureFile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("не удалось создать каталог %s: %w", filepath.Dir(path), err)
+		return fmt.Errorf(i18n.T("Could not create directory %s: %w"), filepath.Dir(path), err)
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("не удалось создать файл %s: %w", path, err)
+		return fmt.Errorf(i18n.T("Could not create file %s: %w"), path, err)
 	}
 	return f.Close()
 }
 
-// appendKnownHost дописывает подтверждённый ключ хоста в файл приложения
-// в формате known_hosts.
+// appendKnownHost appends a confirmed host key to the application file in known_hosts format.
 func appendKnownHost(path, hostname string, key ssh.PublicKey) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {

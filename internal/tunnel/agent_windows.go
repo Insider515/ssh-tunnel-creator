@@ -8,14 +8,13 @@ import (
 	"os"
 
 	"github.com/Microsoft/go-winio"
+	"sshtunnel/internal/i18n"
 )
 
-// openSSHAgentPipe — именованный канал, который слушает штатный агент OpenSSH в Windows.
+// openSSHAgentPipe is the named pipe used by the built-in Windows OpenSSH agent.
 const openSSHAgentPipe = `\\.\pipe\openssh-ssh-agent`
 
-// dialAgent открывает соединение с ssh-agent в Windows.
-// Сначала пробует адрес из SSH_AUTH_SOCK (его задают сторонние агенты),
-// затем именованный канал штатного агента OpenSSH.
+// dialAgent connects to ssh-agent on Windows, trying SSH_AUTH_SOCK before the built-in agent pipe.
 func dialAgent() (net.Conn, error) {
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
 		if conn, err := winio.DialPipe(sock, nil); err == nil {
@@ -27,7 +26,7 @@ func dialAgent() (net.Conn, error) {
 	}
 	conn, err := winio.DialPipe(openSSHAgentPipe, nil)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось подключиться к ssh-agent (%s): %w; запустите службу ssh-agent", openSSHAgentPipe, err)
+		return nil, fmt.Errorf(i18n.T("Could not connect to ssh-agent (%s): %w; start the ssh-agent service"), openSSHAgentPipe, err)
 	}
 	return conn, nil
 }

@@ -3,26 +3,28 @@ package tunnel
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
+	"sshtunnel/internal/i18n"
 )
 
-// AuthMethod — способ аутентификации на jump-сервере.
+// AuthMethod identifies an authentication method for the jump server.
 type AuthMethod string
 
 const (
-	// AuthPassword — аутентификация паролем (password и keyboard-interactive).
+	// AuthPassword uses password and keyboard-interactive authentication.
 	AuthPassword AuthMethod = "password"
-	// AuthKey — аутентификация файлом приватного ключа.
+	// AuthKey uses a private-key file for authentication.
 	AuthKey AuthMethod = "key"
-	// AuthAgent — аутентификация ключами из запущенного ssh-agent.
+	// AuthAgent uses keys from a running ssh-agent.
 	AuthAgent AuthMethod = "agent"
 )
 
-// AuthConfig — параметры аутентификации, заданные оператором.
-// Пароль и passphrase живут только в памяти процесса и никогда не пишутся в файл конфигурации.
+// AuthConfig contains the operator-provided authentication parameters.
+// Passwords and passphrases stay in process memory and are never written to the configuration file.
 type AuthConfig struct {
 	Method        AuthMethod
 	Password      string
@@ -30,21 +32,16 @@ type AuthConfig struct {
 	KeyPassphrase string
 }
 
-// ErrKeyPassphraseRequired возвращается, когда файл ключа зашифрован,
-// а passphrase не задан. UI по этой ошибке просит оператора ввести passphrase.
-var ErrKeyPassphraseRequired = errors.New("файл ключа зашифрован: требуется passphrase")
-
-// buildAuth собирает список ssh.AuthMethod для выбранного способа аутентификации.
-// Проверяет выполнимость способа до начала соединения (есть ли файл ключа, запущен ли агент),
-// чтобы ошибка была конкретной, а не общим "ssh: handshake failed".
-func buildAuth(cfg AuthConfig) ([]ssh.AuthMethod, error) {
+// buildAuth creates SSH authentication methods and returns any resource to close after connecting.
+// It checks that the selected method is usable before starting the SSH connection.
+func buildAuth(cfg AuthConfig) ([]ssh.AuthMethod, io.Closer, error) {
 	switch cfg.Method {
 	case AuthPassword:
 		if cfg.Password == "" {
-			return nil, errors.New("пароль не задан")
+			return nil, nil, errors.New(i18n.T("Password is not set"))
 		}
-		// Часть серверов отключает метод "password" и принимает только
-		// "keyboard-interactive". Отдаём оба, на каждый вопрос отвечая тем же паролем.
+		// Some servers disable "password" and accept only "keyboard-interactive".
+		// Offer both methods and answer each interactive prompt with the same password.
 		kbd := ssh.KeyboardInteractive(func(_, _ string, questions []string, _ []bool) ([]string, error) {
 			answers := make([]string, len(questions))
 			for i := range answers {
@@ -52,47 +49,45 @@ func buildAuth(cfg AuthConfig) ([]ssh.AuthMethod, error) {
 			}
 			return answers, nil
 		})
-		return []ssh.AuthMethod{ssh.Password(cfg.Password), kbd}, nil
+		return []ssh.AuthMethod{ssh.Password(cfg.Password), kbd}, nil, nil
 
 	case AuthKey:
 		signer, err := loadKey(cfg.KeyPath, cfg.KeyPassphrase)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, nil
+		return []ssh.AuthMethod{ssh.PublicKeys(signer)}, nil, nil
 
 	case AuthAgent:
 		conn, err := dialAgent()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		client := agent.NewClient(conn)
 		keys, err := client.List()
 		if err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("ssh-agent не отвечает: %w", err)
+			_ = conn.Close()
+			return nil, nil, fmt.Errorf(i18n.T("Agent is not responding: %w"), err)
 		}
 		if len(keys) == 0 {
-			conn.Close()
-			return nil, errors.New("в ssh-agent нет ни одного ключа (добавьте ключ командой ssh-add)")
+			_ = conn.Close()
+			return nil, nil, errors.New(i18n.T("No key found in ssh-agent; add a key with ssh-add"))
 		}
-		return []ssh.AuthMethod{ssh.PublicKeysCallback(client.Signers)}, nil
+		return []ssh.AuthMethod{ssh.PublicKeysCallback(client.Signers)}, conn, nil
 
 	default:
-		return nil, fmt.Errorf("неизвестный способ аутентификации: %q", cfg.Method)
+		return nil, nil, fmt.Errorf(i18n.T("Unknown authentication method: %q"), cfg.Method)
 	}
 }
 
-// loadKey читает файл приватного ключа и возвращает подписывающего.
-// Зашифрованный ключ без passphrase отдаёт ErrKeyPassphraseRequired,
-// чтобы UI мог отличить этот случай от повреждённого файла.
+// loadKey reads a private-key file and returns its signer.
 func loadKey(path, passphrase string) (ssh.Signer, error) {
 	if path == "" {
-		return nil, errors.New("путь к файлу приватного ключа не задан")
+		return nil, errors.New(i18n.T("Key file path is not set"))
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось прочитать файл ключа %s: %w", path, err)
+		return nil, fmt.Errorf(i18n.T("Key file %s could not be read: %w"), path, err)
 	}
 	if passphrase == "" {
 		signer, err := ssh.ParsePrivateKey(raw)
@@ -101,13 +96,13 @@ func loadKey(path, passphrase string) (ssh.Signer, error) {
 		}
 		var need *ssh.PassphraseMissingError
 		if errors.As(err, &need) {
-			return nil, ErrKeyPassphraseRequired
+			return nil, errors.New(i18n.T("Key file is encrypted; a passphrase is required"))
 		}
-		return nil, fmt.Errorf("не удалось разобрать файл ключа %s: %w", path, err)
+		return nil, fmt.Errorf(i18n.T("Key file %s could not be parsed: %w"), path, err)
 	}
 	signer, err := ssh.ParsePrivateKeyWithPassphrase(raw, []byte(passphrase))
 	if err != nil {
-		return nil, fmt.Errorf("не удалось расшифровать файл ключа %s: %w", path, err)
+		return nil, fmt.Errorf(i18n.T("Key file %s could not be decrypted: %w"), path, err)
 	}
 	return signer, nil
 }
